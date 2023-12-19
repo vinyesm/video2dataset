@@ -19,7 +19,7 @@ def domain_count(url_list: str, output_folder: str):
 if __name__ == "__main__":
     """
     Usage: sample_urls_large_pyspark --url_list=[url_list] --output_folder=[output_folder]
-    Example: sample_urls_large_pyspark --url_list="s3a://my-content/video/one_million.parquet" --output_folder="s3a://my-content/video/urls/video_platform_dataset-stats"
+    Example: sample_urls_large_pyspark --url_list="s3a://my-content/video/urls/one_million.parquet" --output_folder="s3a://my-content/video/urls/video_platform_dataset-stats"
 
     Counts the number of videos per domain in a dataset of urls and save the result to a parquet file
     """
