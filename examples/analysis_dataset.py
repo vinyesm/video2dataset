@@ -10,30 +10,54 @@ import os
 import json
 import pandas as pd
 from urllib.parse import urlparse
+import boto3
 
 
-def list_directories(directory_path):
-    directories = [d for d in os.listdir(directory_path) if os.path.isdir(os.path.join(directory_path, d))]
-    return directories
+# def list_directories(directory_path):
+#     directories = [d for d in os.listdir(directory_path) if os.path.isdir(os.path.join(directory_path, d))]
+#     return directories
 
 
-def parse_json_file(file_path):
-    with open(file_path, "r") as file:
-        data = json.load(file)
-        return {"url": data.get("url", ""), "key": data.get("key", ""), "status": data.get("status", "")}
+def parse_json_file(s3, file_path):
+    # with open(file_path, "r") as file:
+    #     data = json.load(file)
+    #     return {"url": data.get("url", ""), "key": data.get("key", ""), "status": data.get("status", "")}
+    bucket, prefix = file_path[len("s3a://"):].split("/", 1)
+    response = s3.get_object(Bucket=bucket, Key=prefix)
+    json_data = response['Body'].read().decode('utf-8')
+    # Parse the JSON data (modify this based on your actual parsing logic)
+    parsed_data = json.loads(json_data)
+    return {"url": parsed_data.get("url", ""), "key": parsed_data.get("key", ""), "status": parsed_data.get("status", "")}
 
 
-def process_directory(directory_path):
+
+
+def process_directory(s3, directory_path):
     """Process a sub-directories containing json files of downloaded videos and return a dataframe with the data"""
     data_list = []
-    print(list_directories(directory_path))
-    for directory in list_directories(directory_path):
-        for root, _, files in os.walk(directory):
-            for file in files:
-                if file.endswith(".json"):
-                    file_path = os.path.join(root, file)
-                    json_data = parse_json_file(file_path)
-                    data_list.append(json_data)
+    # for directory in list_directories(directory_path):
+    #     for root, _, files in os.walk(directory):
+    #         for file in files:
+    #             if file.endswith(".json") and "stats" not in file:
+    #                 file_path = os.path.join(root, file)
+    #                 json_data = parse_json_file(file_path)
+    #                 data_list.append(json_data)
+    bucket, prefix = input_dir[len("s3a://"):].split("/", 1)
+    paginator = s3.get_paginator('list_objects_v2')
+    pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
+    files = [obj["Key"] for page in pages for obj in page['Contents']]
+    # files2 = [f for f in files if f.endswith(".json") and "stats" not in f]
+    count = 0
+    #TODO: this is too slow, read files in parallel
+    for file in files:
+        if file.endswith(".json") and "stats" not in file:
+            count +=1
+            if count%1000==0:
+                print(count)
+            file_path = os.path.join(f"s3a://{bucket}", file)
+            json_data = parse_json_file(s3, file_path)
+            data_list.append(json_data)
+    print("{count} json files")
     return pd.DataFrame(data_list)
 
 
@@ -50,9 +74,9 @@ def extract_domain(url):
     return normalize_domain(domain)
 
 
-def success_download_rate_per_domain(dataset_directory_path: str, output_filename: str):
+def success_download_rate_per_domain(s3, dataset_directory_path: str, output_filename: str):
     """Compute the success download rate per domain and save it to a csv file"""
-    df = process_directory(dataset_directory_path)
+    df = process_directory(s3, dataset_directory_path)
     df["domain"] = df["url"].apply(extract_domain)
 
     # group df by domain and count success and failure
@@ -70,6 +94,7 @@ def success_download_rate_per_domain(dataset_directory_path: str, output_filenam
 
 
 if __name__ == "__main__":
-    input_dir = "../dataset"
-    out_filename = "success_rate.csv"
-    success_download_rate_per_domain(input_dir, out_filename)
+    input_dir = "s3a://my-content/video/urls/video_platform_dataset-sample/one_million_dataset_v15/"
+    out_filename = "s3a://my-content/video/urls/video_platform_dataset-sample/one_million_dataset_v15_analysis/success_rate.csv"
+    s3 = boto3.client('s3')
+    success_download_rate_per_domain(s3, input_dir, out_filename)
