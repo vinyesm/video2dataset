@@ -244,8 +244,7 @@ class YtDlpDownloader:
 
             err = None
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download(url)
+                err = self.yt_download(ydl_opts, url, timeout_seconds)
             except Exception as e:  # pylint: disable=(broad-except)
                 err = str(e)
                 os.remove(audio_path_m4a)
@@ -271,7 +270,7 @@ class YtDlpDownloader:
             try:
                 # stuck at video not available, no error thrown but stuck
                 # https://www.izlesene.com/video/sev-yeter-99bolumde-neler-olacak-1-kasim-persembe/10363807#similarscen_thumb:click_alg1_dizi_other_visitor|new:10373672:13
-                err = self.yt_download(ydl_opts, url, 600)
+                err = self.yt_download(ydl_opts, url, timeout_seconds)
             except Exception as e:  # pylint: disable=(broad-except)
                 err = str(e)
                 remove_tmp_files(video_path)
@@ -311,7 +310,7 @@ class VideoDataReader:
             if get_file_info(url):  # web file that can be directly downloaded
                 modality_paths, error_message = self.webfile_downloader(url)
             else:
-                modality_paths, meta_dict, error_message = self.yt_downloader(url)
+                modality_paths, meta_dict, error_message = self.yt_downloader(url, 600)
         except Exception as e:  # pylint: disable=(broad-except)
             modality_paths, meta_dict, error_message = {}, None, str(e)
 
