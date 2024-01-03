@@ -6,6 +6,23 @@ import yt_dlp
 import io
 import webvtt
 import ffmpeg
+import concurrent.futures
+import glob
+
+
+def remove_tmp_files(filename: str):
+    """removes all temporary files created by yt-dlp. Not only .mp4 
+    but also other extensions like .ytdl and .part"""
+
+    norm_path = os.path.normpath(filename)
+    base_name, _ = os.path.splitext(norm_path)
+    pattern = f"{base_name}*"
+    files_to_remove = glob.glob(pattern)
+    for file_path in files_to_remove:
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            print(f"Error removing {file_path}: {e}")
 
 
 def video2audio(video, audio_format, tmp_dir):
@@ -52,7 +69,7 @@ def sub_to_dict(sub, dedupe=True, single=False) -> list:
     return dicts
 
 
-def get_yt_meta(url, yt_metadata_args: dict) -> dict:
+def get_yt_meta(url, yt_metadata_args: dict, timeout_seconds=60) -> dict:
     """Return yt meta dict with meta data and/or subtitles
     yt_metadata_args is a dict of follwing format:
     yt_metadata_args = {
@@ -68,35 +85,47 @@ def get_yt_meta(url, yt_metadata_args: dict) -> dict:
     get_info: whether to add info (title, description, tags etc) to the output.
     """
 
-    write_subs = yt_metadata_args.get("writesubtitles", None)
+    def extract_info_inner():
+        write_subs = yt_metadata_args.get("writesubtitles", None)
 
-    yt_metadata_args["skip_download"] = True
-    yt_metadata_args["ignoreerrors"] = True
-    yt_metadata_args["quiet"] = True
+        yt_metadata_args["skip_download"] = True
+        yt_metadata_args["ignoreerrors"] = True
+        yt_metadata_args["quiet"] = True
 
-    info_dict, sub_dict = None, None
+        info_dict, sub_dict = None, None
+        with yt_dlp.YoutubeDL(yt_metadata_args) as yt:
+            info_dict = yt.extract_info(url, download=False)
 
-    with yt_dlp.YoutubeDL(yt_metadata_args) as yt:
+            if write_subs:
+                sub_url = info_dict["requested_subtitles"][yt_metadata_args["subtitleslangs"][0]]["url"]
+                res = requests.get(sub_url)
+                sub = io.TextIOWrapper(io.BytesIO(res.content)).read()
+                sub_dict = sub_to_dict(sub)
 
-        info_dict = yt.extract_info(url, download=False)
-        if write_subs:
-            sub_url = info_dict["requested_subtitles"][yt_metadata_args["subtitleslangs"][0]]["url"]
-            res = requests.get(sub_url)
-            sub = io.TextIOWrapper(io.BytesIO(res.content)).read()
-            sub_dict = sub_to_dict(sub)
+            if yt_metadata_args["get_info"]:
+                info_dict.pop("subtitles")
+                info_dict.pop("requested_formats")
+                info_dict.pop("formats")
+                info_dict.pop("thumbnails")
+                info_dict.pop("automatic_captions")
+            else:
+                info_dict = None
 
-        if yt_metadata_args["get_info"]:
-            info_dict.pop("subtitles")
-            info_dict.pop("requested_formats")
-            info_dict.pop("formats")
-            info_dict.pop("thumbnails")
-            info_dict.pop("automatic_captions")
-        else:
-            info_dict = None
+            yt_meta_dict = {"info": info_dict, "subtitles": sub_dict}
 
-        yt_meta_dict = {"info": info_dict, "subtitles": sub_dict}
+            return yt_meta_dict
+    
+    result = {"info": None, "subtitles": None}
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(extract_info_inner)
+        try:
+            result = future.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(f"get_yt_meta timed out after {timeout_seconds} seconds")
+        except yt_dlp.utils.DownloadError as e:
+            print(f"Error: get_yt_meta extracting info: {e}")
 
-        return yt_meta_dict
+    return extract_info_inner()
 
 
 def get_file_info(url):
@@ -146,7 +175,7 @@ class WebFileDownloader:
 
         for modality, modality_path in modality_paths.items():
             if modality not in self.encode_formats:
-                os.remove(modality_path)
+                remove_tmp_files(modality_path)
                 modality_path.pop(modality)
 
         return modality_paths, None
@@ -173,7 +202,27 @@ class YtDlpDownloader:
         # was relevant with HD videos for loading with decord
         self.specify_codec = False
 
-    def __call__(self, url):
+    def yt_download(self, ydl_opts, url, timeout_seconds):
+        def yt_download_inner():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download(url)
+        
+        err = None
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(yt_download_inner)
+            try:
+                future.result(timeout=timeout_seconds)
+            except concurrent.futures.TimeoutError as e:
+                err = str(e)
+                raise TimeoutError(f"yt_download timed out after {timeout_seconds} seconds")
+            except yt_dlp.utils.DownloadError as e:
+                err = str(e)
+                print(f"ERROR: yt_download Error extracting info: {e}")
+
+        return err
+
+
+    def __call__(self, url, timeout_seconds):
         modality_paths = {}
 
         video_format_string = (
@@ -209,7 +258,8 @@ class YtDlpDownloader:
                 modality_paths["audio"] = audio_path
 
         if self.encode_formats.get("video", None):
-            video_path = f"{self.tmp_dir}/{str(uuid.uuid4())}.mp4"
+            video_uuid = str(uuid.uuid4())
+            video_path = f"{self.tmp_dir}/{video_uuid}.mp4"
             ydl_opts = {
                 "outtmpl": video_path,
                 "format": video_format_string,
@@ -219,26 +269,30 @@ class YtDlpDownloader:
 
             err = None
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download(url)
+                # stuck at video not available, no error thrown but stuck
+                # https://www.izlesene.com/video/sev-yeter-99bolumde-neler-olacak-1-kasim-persembe/10363807#similarscen_thumb:click_alg1_dizi_other_visitor|new:10373672:13
+                err = self.yt_download(ydl_opts, url, 600)
             except Exception as e:  # pylint: disable=(broad-except)
                 err = str(e)
-                os.remove(video_path)
+                remove_tmp_files(video_path)
 
             if err is None:
                 modality_paths["video"] = video_path
+            else:
+                remove_tmp_files(video_path)
 
-        err = None
+        #TODO:log err2 somewhere
+        err2 = None
         try:
             if self.metadata_args:
                 yt_meta_dict = get_yt_meta(url, self.metadata_args)
             else:
                 yt_meta_dict = {}
         except Exception as e:  # pylint: disable=(broad-except)
-            err = str(e)
+            err2 = str(e)
             yt_meta_dict = {}
 
-        return modality_paths, yt_meta_dict, None
+        return modality_paths, yt_meta_dict, err
 
 
 class VideoDataReader:
@@ -263,8 +317,11 @@ class VideoDataReader:
 
         streams = {}
         for modality, modality_path in modality_paths.items():
-            with open(modality_path, "rb") as modality_file:
-                streams[modality] = modality_file.read()
-            os.remove(modality_path)
-
+            try:
+                with open(modality_path, "rb") as modality_file:
+                    streams[modality] = modality_file.read()
+                remove_tmp_files(modality_path)
+            except FileNotFoundError:
+                print(f"The file {modality_path} does not exist.")
+ 
         return key, streams, meta_dict, error_message
