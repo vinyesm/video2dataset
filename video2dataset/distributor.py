@@ -7,6 +7,7 @@ from datetime import datetime
 from contextlib import contextmanager
 from multiprocessing import get_context
 from itertools import islice, chain
+import faulthandler
 
 import fsspec
 from tqdm import tqdm
@@ -43,6 +44,7 @@ def no_distributor(process_count, worker, input_sharder, _, max_shard_retry):  #
 
 def multiprocessing_distributor(processes_count, worker, input_sharder, _, max_shard_retry):
     """Distribute the work to the processes using multiprocessing"""
+    faulthandler.enable()
     ctx = get_context("spawn")
     with ctx.Pool(processes_count, maxtasksperchild=5) as process_pool:
 
