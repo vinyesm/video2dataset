@@ -48,7 +48,7 @@ def multiprocessing_distributor(processes_count, worker, input_sharder, _, max_s
 
         def run(gen):
             failed_shards = []
-            for (status, row) in tqdm(process_pool.imap_unordered(worker, gen)):
+            for (status, row) in tqdm(process_pool.imap_unordered(worker, gen, timeout=1000)):
                 if status is False:
                     failed_shards.append(row)
             return failed_shards
