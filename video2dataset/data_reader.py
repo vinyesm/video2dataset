@@ -8,6 +8,21 @@ import webvtt
 import ffmpeg
 
 
+def remove_tmp_files(filename: str):
+    """removes all temporary files created by yt-dlp. Not only .mp4 
+    but also other extensions like .ytdl and .part"""
+
+    norm_path = os.path.normpath(filename)
+    base_name, _ = os.path.splitext(norm_path)
+    pattern = f"{base_name}*"
+    files_to_remove = glob.glob(pattern)
+    for file_path in files_to_remove:
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            print(f"Error removing {file_path}: {e}")
+
+
 def video2audio(video, audio_format, tmp_dir):
     """extract audio from video"""
     path = f"{tmp_dir}/{str(uuid.uuid4())}.{audio_format}"
@@ -147,6 +162,7 @@ class WebFileDownloader:
         for modality, modality_path in modality_paths.items():
             if modality not in self.encode_formats:
                 os.remove(modality_path)
+                remove_tmp_files(modality_path)
                 modality_path.pop(modality)
 
         return modality_paths, None
@@ -224,9 +240,12 @@ class YtDlpDownloader:
             except Exception as e:  # pylint: disable=(broad-except)
                 err = str(e)
                 os.remove(video_path)
+                remove_tmp_files(video_path)
 
             if err is None:
                 modality_paths["video"] = video_path
+            else:
+                remove_tmp_files(video_path)
 
         err = None
         try:
@@ -265,6 +284,7 @@ class VideoDataReader:
         for modality, modality_path in modality_paths.items():
             with open(modality_path, "rb") as modality_file:
                 streams[modality] = modality_file.read()
+            remove_tmp_files(modality_path)
             os.remove(modality_path)
 
         return key, streams, meta_dict, error_message
