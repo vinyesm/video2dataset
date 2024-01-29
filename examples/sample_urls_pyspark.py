@@ -6,25 +6,27 @@ import fire
 
 
 def domain_count(url_list: str, output_folder: str):
-    spark = SparkSession.builder.appName("DomainCount").getOrCreate()
+    #spark = SparkSession.builder.appName("DomainCount").getOrCreate()
+    spark = SparkSession.builder.config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.4").config("spark.driver.memory", "16G").config("spark.local.dir", "/home/ubuntu/spark-tmp").master("local[16]").appName('domain-count').getOrCreate()
     spark.sql("set spark.sql.files.ignoreCorruptFiles=true")
     df = spark.read.parquet(url_list)
     result_df = df.withColumn("domain", expr("parse_url(url, 'HOST')")) \
         .withColumn("domain", expr("lower(coalesce(substring_index(domain, 'www.', -1), domain))")) \
         .groupBy("domain").count().orderBy(col("count").desc())
-    result_df.repartition(1).write.parquet(output_folder, mode="overwrite", compression="snappy")
+    result_df.repartition(1000).write.parquet(output_folder, mode="overwrite", compression="snappy")
     return
 
 
 def sample_urls_per_domain(url_list: str, output_folder: str):
-    spark = SparkSession.builder.appName("DomainCount").getOrCreate()
+    #spark = SparkSession.builder.appName("DomainCount").getOrCreate()
+    spark = SparkSession.builder.config("spark.driver.memory", "16G").config("spark.local.dir", "/home/ubuntu/spark-tmp").master("local[16]").appName('sample-urls').getOrCreate()
     spark.sql("set spark.sql.files.ignoreCorruptFiles=true")
     df = spark.read.parquet(url_list)
     result_df = df.select("url") \
         .withColumn("domain", expr("parse_url(url, 'HOST')")) \
         .withColumn("domain", expr("lower(coalesce(substring_index(domain, 'www.', -1), domain))"))
     sample_df = sample_x_random_rows_per_group(result_df, "domain", 100)
-    sample_df.repartition(1).write.parquet(output_folder, mode="overwrite", compression="snappy")
+    sample_df.repartition(1000).write.parquet(output_folder, mode="overwrite", compression="snappy")
     return
 
 
@@ -44,4 +46,5 @@ if __name__ == "__main__":
 
     Counts the number of videos per domain in a dataset of urls and save the result to a parquet file
     """
-    fire.Fire(sample_urls_per_domain)
+    #fire.Fire(sample_urls_per_domain)
+    fire.Fire(domain_count)
